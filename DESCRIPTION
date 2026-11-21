@@ -1,0 +1,34 @@
+Package: logitfit
+Title: Logistic Regression by Iteratively Reweighted Least Squares
+Version: 0.1.0
+Authors@R: person("Aayush", "Sheth", email = "acsheth@umich.edu", role = c("aut", "cre"))
+Author: Aayush Sheth
+Maintainer: Aayush Sheth <acsheth@umich.edu>
+Description: Fits binomial logistic regression with the logit link by Fisher
+    scoring, also called iteratively reweighted least squares. The scoring
+    update is implemented directly in R and in C++ through Rcpp, and the
+    package returns coefficients, Wald inference, fitted probabilities, and
+    predictions that can be checked against stats::glm.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Language: en-US
+Depends: R (>= 4.0.0)
+Imports:
+    bench,
+    Rcpp,
+    stats
+LinkingTo:
+    Rcpp
+Suggests:
+    covr,
+    knitr,
+    rmarkdown,
+    testthat (>= 3.0.0)
+VignetteBuilder: knitr
+SystemRequirements: C++17
+Config/testthat/edition: 3
+Roxygen: list(markdown = TRUE)
+URL: https://github.com/acsheth/BIOSTAT625_HW4
+BugReports: https://github.com/acsheth/BIOSTAT625_HW4/issues
+LazyData: true
+Config/roxygen2/version: 8.1.1

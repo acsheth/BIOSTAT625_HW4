@@ -1,0 +1,149 @@
+---
+title: "Logistic regression with logitfit"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Logistic regression with logitfit}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+```{r setup}
+library(logitfit)
+```
+
+`logitfit` fits a binomial logistic regression by Fisher scoring, also called iteratively reweighted least squares (IRLS). The scoring loop is implemented in this package. It does not call `stats::glm()` to obtain the coefficients.
+
+For an observation with success proportion \(y_i\), prior weight \(w_i\), covariate row \(x_i\), and offset \(o_i\),
+
+\[
+\mu_i = \frac{1}{1 + \exp(-(x_i^\top\beta + o_i))}.
+\]
+
+The log-likelihood contribution is \(w_i\{y_i\log\mu_i + (1-y_i)\log(1-\mu_i)\}\). Differentiating and applying Newton's method produces the weighted least-squares update
+
+\[
+z_i = \eta_i - o_i + \frac{y_i - \mu_i}{\mu_i(1-\mu_i)}, \qquad
+\beta^{\mathrm{new}} = \arg\min_\beta \sum_i w_i\mu_i(1-\mu_i)\,(z_i - x_i^\top\beta)^2,
+\]
+
+with \(\eta_i = x_i^\top\beta + o_i\). For the canonical logit link this is the same as Newton-Raphson. Iteration stops when the relative change in deviance is below `epsilon` (default `1e-8`, the same rule as `glm.fit`).
+
+Two engines run that update. `engine = "r"` solves the weighted least-squares step with a QR decomposition. `engine = "rcpp"` builds \(X^\top WX\) in C++ and factors it with a Cholesky decomposition. `engine = "auto"` uses C++ when the package was compiled.
+
+## A fitted model
+
+`icu_sim` is a simulated intensive-care sample shipped with the package. Death depends on age, a 1-4 severity score, treatment, and whether the admission was elective. The data-generating coefficients are in `?icu_sim`.
+
+```{r fit-icu}
+fit <- logit_fit(died ~ age + severity + treatment + elective, data = icu_sim)
+summary(fit)
+exp(coef(fit)["treatment"])
+```
+
+`exp(coef)` for `treatment` is an odds ratio: the multiplicative change in the odds of death when the patient is treated, holding age, severity, and elective admission fixed. Wald intervals use the expected information matrix at the fitted probabilities, with the binomial dispersion fixed at 1.
+
+```{r predict-icu}
+new_patient <- data.frame(age = 70, severity = 3, treatment = c(0, 1), elective = 0)
+predict(fit, newdata = new_patient, type = "response", se.fit = TRUE)
+```
+
+The two rows are the fitted probability of death for the same patient off and on treatment. The plot below shows the fitted probability against age, with observed deaths in a darker color.
+
+```{r plot-icu, fig.width = 6, fig.height = 4}
+plot(
+  icu_sim$age, fitted(fit),
+  xlab = "Age (years)",
+  ylab = "Fitted probability of death",
+  pch = 16,
+  col = ifelse(icu_sim$died == 1, "firebrick", "steelblue")
+)
+legend("topleft", c("survived", "died"), col = c("steelblue", "firebrick"), pch = 16, bty = "n")
+```
+
+## Correctness against `glm`
+
+The same formula is fit with `stats::glm(..., family = binomial())`. `all.equal()` checks the coefficients and the residual deviance. On this sample both should match well inside the default tolerance.
+
+```{r all-equal-icu}
+fit_glm <- glm(
+  died ~ age + severity + treatment + elective,
+  data = icu_sim,
+  family = binomial()
+)
+all.equal(coef(fit), coef(fit_glm))
+all.equal(fit$deviance, fit_glm$deviance)
+all.equal(as.numeric(fitted(fit)), as.numeric(fitted(fit_glm)))
+```
+
+`compare_with_glm()` repeats that check for the pure R engine and the C++ engine, and it also checks fitted values, linear predictors, the null deviance, and AIC.
+
+```{r compare-icu}
+cmp_icu <- compare_with_glm(
+  died ~ age + severity + treatment + elective,
+  data = icu_sim,
+  n_bench = 0
+)
+cmp_icu$agreement
+```
+
+## Simulated data, grouped outcomes, and timing
+
+The next sample is larger, so the timing comparison is easier to read. Each row is one binary observation. A second fit uses the two-column (successes, failures) response, which is the grouped binomial likelihood.
+
+```{r simulate}
+set.seed(625)
+n <- 4000
+sim <- data.frame(
+  x1 = rnorm(n),
+  x2 = rnorm(n),
+  x3 = rbinom(n, 1, 0.45)
+)
+eta <- -0.4 + 0.55 * sim$x1 - 0.35 * sim$x2 + 0.8 * sim$x3
+sim$y <- rbinom(n, 1, plogis(eta))
+sim$trials <- 5
+sim$success <- rbinom(n, sim$trials, plogis(eta))
+sim$failure <- sim$trials - sim$success
+```
+
+```{r all-equal-sim}
+fit_sim <- logit_fit(y ~ x1 + x2 + x3, data = sim)
+glm_sim <- glm(y ~ x1 + x2 + x3, data = sim, family = binomial())
+all.equal(coef(fit_sim), coef(glm_sim))
+all.equal(deviance(fit_sim), deviance(glm_sim))
+
+fit_grouped <- logit_fit(cbind(success, failure) ~ x1 + x2 + x3, data = sim)
+glm_grouped <- glm(cbind(success, failure) ~ x1 + x2 + x3, data = sim, family = binomial())
+all.equal(coef(fit_grouped), coef(glm_grouped))
+```
+
+`bench::mark()` times `glm`, the pure R engine, and the C++ engine on the same binary sample. `glm` is written in C inside the `stats` package, so it is expected to be fast. The C++ engine should usually be faster than the pure R loop because the iteration does not go back to the R interpreter. Beating `glm` is not required.
+
+```{r benchmark}
+comparison <- compare_with_glm(y ~ x1 + x2 + x3, data = sim, n_bench = 5)
+comparison$agreement
+comparison$benchmark
+```
+
+Every `all_equal` entry above should be `TRUE`. `max_coef_diff` is the largest absolute gap between a `logitfit` coefficient vector and the `glm` coefficient vector.
+
+```{r max-diff}
+comparison$max_coef_diff
+```
+
+## What is stored
+
+`summary()` prints Wald tests. `confint()` returns Wald intervals. `residuals()` supports deviance, Pearson, working, and response residuals. `weights(fit, type = "working")` returns the IRLS weights \(\mu(1-\mu)\) times the prior weight.
+
+```{r pieces}
+head(confint(fit_sim), 3)
+head(residuals(fit_sim, type = "deviance"))
+```
+
+Refit with `control = logit_control(trace = TRUE)` to print the deviance at every iteration, or with `engine = "r"` to force the QR implementation.
